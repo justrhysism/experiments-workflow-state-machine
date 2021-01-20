@@ -48,7 +48,6 @@ const handleStepComplete = pure<WorkflowMachineContext, AnyEventObject>((context
 export interface WorkflowStepDefinition {
 	id: string;
 	deps?: string[];
-	process?: () => Promise<void>;
 }
 
 type TreeLike<T> = {
@@ -73,10 +72,11 @@ interface WorkflowMachineContext {
 export interface WorkflowStateHookProps {
 	id?: string;
 	steps?: WorkflowStepDefinition[];
+	onProcess?: (props: { id: string }) => Promise<void>;
 }
 
 export const useWorkflowMachine = (props: WorkflowStateHookProps) => {
-	const { id: workflowId = 'workflow', steps } = props;
+	const { id: workflowId = 'workflow', steps, onProcess = async () => void 0 } = props;
 
 	// const dependencyGraph
 	const workflowMachine = useMemo(() => {
@@ -84,10 +84,7 @@ export const useWorkflowMachine = (props: WorkflowStateHookProps) => {
 
 		const firstStepId = _steps[0]?.id;
 		const stepSpawns = Object.fromEntries(
-			_steps.map(({ id, process }) => [
-				stepRefId(id),
-				() => spawn(stepMachineFactory({ id, onProcess: process }), { sync: true }),
-			])
+			_steps.map(({ id }) => [stepRefId(id), () => spawn(stepMachineFactory({ id }), { sync: true })])
 		);
 		const stepRefs = Object.fromEntries(Object.keys(stepSpawns).map((k) => [k, null]));
 
@@ -114,89 +111,106 @@ export const useWorkflowMachine = (props: WorkflowStateHookProps) => {
 
 		console.log('graphMap', graphMap);
 
-		return Machine<WorkflowMachineContext>(
-			{
-				id: workflowId,
-				initial: 'initial',
-				context: {
-					currentStepIndex: 0,
-					runningStepIndex: -1,
-					graphMap,
-					graphIndexMap,
-					...stepRefs,
+		return Machine<WorkflowMachineContext>({
+			id: workflowId,
+			initial: 'initial',
+			context: {
+				currentStepIndex: 0,
+				runningStepIndex: -1,
+				graphMap,
+				graphIndexMap,
+				...stepRefs,
+			},
+			states: {
+				initial: {
+					entry: assign<WorkflowMachineContext>({
+						...stepSpawns,
+					}),
+					always: 'start',
 				},
-				states: {
-					initial: {
-						entry: assign<WorkflowMachineContext>({
-							...stepSpawns,
-						}),
-						always: 'start',
-					},
-					start: {
-						entry: send('START', { to: (context) => context[stepRefId(firstStepId)] }),
-						always: 'idle',
-					},
-					idle: {
-						entry: assign<WorkflowMachineContext>({ runningStepIndex: () => -1 }),
-						on: {
-							RUN: 'running',
-							STEP_OUTDATED: {}, // TODO
-							'currentStep.UPDATE': {
-								actions: assign({
-									currentStepIndex: (context, { value }) => {
-										if (typeof value === 'number') return value;
-										return context.graphMap.get(value)?.index ?? 0;
-									},
-								}),
-								cond: (context, { value }) => context[`${value}Ref`]?.state.value !== 'initial',
-							},
+				start: {
+					entry: send('START', { to: (context) => context[stepRefId(firstStepId)] }),
+					always: 'idle',
+				},
+				idle: {
+					entry: assign<WorkflowMachineContext>({ runningStepIndex: () => -1 }),
+					on: {
+						RUN: 'running',
+						STEP_OUTDATED: {}, // TODO
+						'currentStep.UPDATE': {
+							actions: assign({
+								currentStepIndex: (context, { value }) => {
+									if (typeof value === 'number') return value;
+									return context.graphMap.get(value)?.index ?? 0;
+								},
+							}),
+							cond: (context, { value }) => context[`${value}Ref`]?.state.value !== 'initial',
 						},
 					},
-					running: {
-						initial: 'queue',
-						entry: assign({ runningStepIndex: (context) => -1 }),
-						on: {
-							STOP: 'idle',
+				},
+				running: {
+					initial: 'queue',
+					entry: assign({ runningStepIndex: (context) => -1 }),
+					on: {
+						STOP: 'idle',
+					},
+					states: {
+						queue: {
+							entry: assign({ runningStepIndex: (context) => (context.runningStepIndex ?? 0) + 1 }),
+							always: 'process',
 						},
-						states: {
-							queue: {
-								entry: assign({ runningStepIndex: (context) => (context.runningStepIndex ?? 0) + 1 }),
-								always: 'process',
-							},
-							process: {
-								entry: send('PROCESS', {
-									to: (context) => context[context.graphIndexMap.get(context.runningStepIndex)?.refId || ''],
-								}),
-								on: {
-									STEP_COMPLETE: [
-										{
-											target: 'done',
-											cond: (context) => context.currentStepIndex === context.runningStepIndex,
-											actions: handleStepComplete,
-										},
-										{ target: 'queue' },
-									],
-									STEP_INVALID: {
-										target: 'done',
-										actions: assign({ currentStepIndex: (context) => context.runningStepIndex }),
-									},
+						process: {
+							entry: send('PROCESS', {
+								to: (context) => context[context.graphIndexMap.get(context.runningStepIndex)?.refId || ''],
+							}),
+							invoke: {
+								src: 'process',
+								onDone: {
+									actions: send('VALID', {
+										to: (context) => context[context.graphIndexMap.get(context.runningStepIndex)?.refId || ''],
+									}),
+								},
+								onError: {
+									actions: send('INVALID', {
+										to: (context) => context[context.graphIndexMap.get(context.runningStepIndex)?.refId || ''],
+									}),
 								},
 							},
-							done: {
-								type: 'final',
-								exit: assign({ runningStepIndex: (context) => -1 }),
+							on: {
+								STEP_COMPLETE: [
+									{
+										target: 'done',
+										cond: (context) => context.currentStepIndex === context.runningStepIndex,
+										actions: handleStepComplete,
+									},
+									{ target: 'queue' },
+								],
+								STEP_INVALID: {
+									target: 'done',
+									actions: assign({ currentStepIndex: (context) => context.runningStepIndex }),
+								},
 							},
 						},
-						onDone: 'idle',
+						done: {
+							type: 'final',
+							exit: assign({ runningStepIndex: (context) => -1 }),
+						},
 					},
+					onDone: 'idle',
 				},
 			},
-			{
-				actions: {},
-				guards: {},
-			}
-		);
+		});
 	}, [workflowId, steps]);
 
-	return useMachine(workflowMachine, { devTools: true });
+	return useMachine(workflowMachine, {
+		devTools: true,
+		services: {
+			process: (context, event) => {
+				const currentItem = context.graphIndexMap.get(context.runningStepIndex);
+
+				if (!currentItem) return Promise.resolve();
+				return onProcess({ id: currentItem?.id });
+			},
+		},
+	});
 };

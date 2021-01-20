@@ -1,17 +1,15 @@
 import { Machine, sendParent } from 'xstate';
 
+interface EventHookProps {
+	id: string;
+}
+
 interface StepMachineFactoryProps {
 	id: string;
-	onReady?: () => Promise<void>;
-	onProcess?: () => Promise<any>;
-	onComplete?: () => Promise<void>;
-	onInvalid?: () => Promise<void>;
-	onOutdated?: () => Promise<void>;
-	onLocked?: () => Promise<void>;
 }
 
 export const stepMachineFactory = (props: StepMachineFactoryProps) => {
-	const { id, onProcess: process = async () => void 0 } = props;
+	const { id } = props;
 
 	return Machine({
 		id,
@@ -35,16 +33,20 @@ export const stepMachineFactory = (props: StepMachineFactoryProps) => {
 				},
 			},
 			processing: {
-				invoke: {
-					src: process,
-					onDone: {
-						target: 'complete',
-					},
-					onError: {
-						target: 'invalid',
-					},
+				// invoke: {
+				// 	src: () => process({ id }),
+				// 	onDone: {
+				// 		target: 'complete',
+				// 	},
+				// 	onError: {
+				// 		target: 'invalid',
+				// 	},
+				// },
+				entry: sendParent({ type: 'STEP_PROCESSING', id }),
+				on: {
+					VALID: 'complete',
+					INVALID: 'invalid',
 				},
-				on: {},
 			},
 			complete: {
 				entry: sendParent({ type: 'STEP_COMPLETE', id }),
