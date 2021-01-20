@@ -1,0 +1,100 @@
+.App {
+	font-family: sans-serif;
+	text-align: center;
+}
+
+.step {
+	position: relative;
+	margin: 1em;
+	text-align: center;
+}
+
+.step__spot {
+	--size: 50px;
+	position: relative;
+	display: inline-block;
+	height: var(--size);
+	width: var(--size);
+	margin: 1em auto;
+}
+
+.step__spot-graphic {
+	display: flex;
+	height: 100%;
+	width: 100%;
+	background: white;
+	border: 3px solid rgb(41, 41, 41);
+	border-radius: 100%;
+	cursor: pointer;
+}
+
+.step__sublabel {
+	font-size: 9px;
+}
+
+.step__active-arrow {
+	font-size: 3em;
+	position: absolute;
+	right: calc(100% + 0.5em);
+	top: calc(50% - 0.5em);
+}
+
+.step__actions {
+	position: absolute;
+	left: calc(100% + 2em);
+	top: calc(50%);
+	transform: translateY(-50%);
+	display: flex;
+}
+
+.step.is-disabled {
+	opacity: 0.3;
+}
+
+.step.is-progress .step__spot-graphic {
+	background: yellow;
+}
+.step.is-valid .step__spot-graphic {
+	background: greenyellow;
+}
+.step.is-invalid .step__spot-graphic {
+	background: red;
+}
+.step.is-complete .step__spot-graphic {
+	background: green;
+}
+.step.is-outdated .step__spot-graphic {
+	background: orange;
+}
+.step.is-locked .step__spot-graphic {
+	background: rgb(17, 92, 190);
+}
+.step.is-processing .step__spot-graphic {
+	background: repeating-linear-gradient(45deg, transparent, transparent 5px, grey 5px, grey 10px);
+}
+
+.button-container {
+	position: fixed;
+	top: 50px;
+	right: 50px;
+}
+
+button {
+	padding: 0.5em 1em;
+	background: darkblue;
+	color: white;
+	font-weight: bold;
+	font-size: 1.2em;
+	border: 1px solid darkblue;
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+button.action {
+	font-size: 0.8em;
+	padding: 0.25em 0.75em;
+	margin: 0.5rem;
+	background: white;
+	color: #555;
+	border-color: #555;
+}
