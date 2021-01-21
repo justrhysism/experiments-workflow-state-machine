@@ -5,7 +5,7 @@
 import { useMemo } from 'react';
 import { Machine, assign, spawn, send, EventObject, ActionObject, AnyEventObject } from 'xstate';
 import { useMachine } from '@xstate/react';
-import { stepMachineFactory, StepMachineContext } from '../stepMachine';
+import { stepMachineFactory, StepMachineContext, StepMachineFactoryProps } from '../stepMachine';
 import { pure } from 'xstate/lib/actions';
 
 export const stepRefId = (id: string) => `${id}Ref`;
@@ -55,8 +55,7 @@ const handleStepTouchAction = pure<WorkflowMachineContext, AnyEventObject>((cont
 	return outdatedSteps.map((outdated) => send('OUTDATE', { to: context[outdated.refId] }));
 });
 
-export interface WorkflowStepDefinition extends Partial<Pick<StepMachineContext, 'alwaysProcess' | 'disableProcessFromStates'>> {
-	id: string;
+export interface WorkflowStepDefinition extends StepMachineFactoryProps {
 	deps?: string[];
 	softDeps?: string[];
 	outdatable?: boolean;
@@ -99,12 +98,9 @@ export const useWorkflowMachine = (props: WorkflowStateHookProps) => {
 
 			const firstStepId = _steps[0]?.id;
 			const stepSpawns = Object.fromEntries(
-				_steps.map(({ id, disableProcessFromStates }) => [
+				_steps.map(({ id, context }) => [
 					stepRefId(id),
-					() =>
-						spawn(stepMachineFactory({ id, context: { disableProcessFromStates: disableProcessFromStates ?? [] } }), {
-							sync: true,
-						}),
+					() => spawn(stepMachineFactory({ id, context }), { sync: true }),
 				])
 			);
 			const stepRefs = Object.fromEntries(Object.keys(stepSpawns).map((k) => [k, null]));

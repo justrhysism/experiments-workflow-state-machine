@@ -1,6 +1,6 @@
 import { Machine, sendParent } from 'xstate';
 
-interface StepMachineFactoryProps {
+export interface StepMachineFactoryProps {
 	id: string;
 	context?: Partial<StepMachineContext>;
 }
@@ -10,10 +10,8 @@ export interface StepMachineContext {
 	disableProcessFromStates: ('ready' | 'outdatable' | 'outdated' | 'complete' | 'invalid')[];
 }
 
-export const stepMachineFactory = (props: StepMachineFactoryProps) => {
-	const { id, context = {} } = props;
-
-	return Machine<StepMachineContext>({
+export const stepMachineFactory = ({ id, context = {} }: StepMachineFactoryProps) =>
+	Machine<StepMachineContext>({
 		id,
 		initial: 'initial',
 		context: {
@@ -139,4 +137,3 @@ export const stepMachineFactory = (props: StepMachineFactoryProps) => {
 			},
 		},
 	});
-};
