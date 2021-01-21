@@ -55,7 +55,7 @@ const handleStepTouchAction = pure<WorkflowMachineContext, AnyEventObject>((cont
 	return outdatedSteps.map((outdated) => send('OUTDATE', { to: context[outdated.refId] }));
 });
 
-export interface WorkflowStepDefinition extends Partial<Pick<StepMachineContext, 'disableProcessFromStates'>> {
+export interface WorkflowStepDefinition extends Partial<Pick<StepMachineContext, 'alwaysProcess' | 'disableProcessFromStates'>> {
 	id: string;
 	deps?: string[];
 	softDeps?: string[];
@@ -199,12 +199,25 @@ export const useWorkflowMachine = (props: WorkflowStateHookProps) => {
 						states: {
 							queue: {
 								entry: assign({ runningStepIndex: (context) => (context.runningStepIndex ?? 0) + 1 }),
-								always: 'process',
+								always: 'ready',
 							},
-							process: {
+							ready: {
 								entry: send('PROCESS', {
 									to: (context) => context[context.graphIndexMap.get(context.runningStepIndex)?.refId || ''],
 								}),
+								on: {
+									STEP_PROCESSING: 'process',
+									STEP_SKIP: [
+										{
+											target: 'done',
+											cond: (context) => context.currentStepIndex === context.runningStepIndex,
+											actions: assign({ currentStepIndex: (context) => context.currentStepIndex + 1 }),
+										},
+										{ target: 'queue' },
+									],
+								},
+							},
+							process: {
 								invoke: {
 									src: 'process',
 									onDone: {

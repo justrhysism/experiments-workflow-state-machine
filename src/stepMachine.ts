@@ -6,6 +6,7 @@ interface StepMachineFactoryProps {
 }
 
 export interface StepMachineContext {
+	alwaysProcess?: boolean;
 	disableProcessFromStates: ('ready' | 'outdatable' | 'outdated' | 'complete' | 'invalid')[];
 }
 
@@ -16,6 +17,7 @@ export const stepMachineFactory = (props: StepMachineFactoryProps) => {
 		id,
 		initial: 'initial',
 		context: {
+			alwaysProcess: false,
 			disableProcessFromStates: [],
 			...context,
 		},
@@ -27,7 +29,6 @@ export const stepMachineFactory = (props: StepMachineFactoryProps) => {
 				},
 			},
 			ready: {
-				// entry: sendParent({ type: 'STEP_READY', id }),
 				on: {
 					PROCESS: [
 						{
@@ -79,18 +80,21 @@ export const stepMachineFactory = (props: StepMachineFactoryProps) => {
 					OUTDATE: 'outdated',
 					PROCESS: [
 						// Force running of every step when workflow is running
-						// {
-						// 	target: 'processing',
-						// 	cond: (context) => !context.disableProcessFromStates.includes('complete'),
-						// },
-						// {
-						// 	actions: sendParent({ type: 'STEP_INVALID', id }),
-						// 	cond: (context) => context.disableProcessFromStates.includes('complete'),
-						// },
+						{
+							target: 'processing',
+							cond: (context) =>
+								Boolean(context.alwaysProcess) && !context.disableProcessFromStates.includes('complete'),
+						},
+						{
+							actions: sendParent({ type: 'STEP_INVALID', id }),
+							cond: (context) =>
+								Boolean(context.alwaysProcess) && context.disableProcessFromStates.includes('complete'),
+						},
 
 						// Skip step when workflow is running
 						{
-							actions: sendParent('STEP_COMPLETE'),
+							actions: sendParent('STEP_SKIP'),
+							cond: (context) => !context.alwaysProcess,
 						},
 					],
 					TOUCH: 'touched',

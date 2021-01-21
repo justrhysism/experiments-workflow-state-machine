@@ -47,8 +47,10 @@ export default function App() {
 	];
 	const [validSteps, { toggle, has }] = useSet<string>(new Set(steps.map((s) => s.id)));
 
-	const processStep = ({ id }: { id: string }) =>
-		new Promise<void>((resolve, reject) => setTimeout(() => (has(id) ? resolve() : reject()), 200));
+	const processStep = ({ id }: { id: string }) => {
+		console.log('process', id);
+		return new Promise<void>((resolve, reject) => setTimeout(() => (has(id) ? resolve() : reject()), 500));
+	};
 
 	const [current, send] = useWorkflowMachine({ steps, onProcess: processStep });
 	console.log(current);
