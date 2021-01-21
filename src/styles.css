@@ -26,6 +26,9 @@
 	border: 3px solid rgb(41, 41, 41);
 	border-radius: 100%;
 	cursor: pointer;
+	justify-content: center;
+	align-items: center;
+	font-size: 1.5em;
 }
 
 .step__sublabel {
@@ -52,7 +55,7 @@
 	opacity: 0.3;
 }
 
-.step.is-progress .step__spot-graphic {
+.step.is-touched .step__spot-graphic {
 	background: yellow;
 }
 .step.is-valid .step__spot-graphic {
@@ -78,6 +81,7 @@
 	position: fixed;
 	top: 50px;
 	right: 50px;
+	z-index: 1000;
 }
 
 button {

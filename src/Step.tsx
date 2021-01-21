@@ -12,6 +12,7 @@ export type StepState =
 	| 'locked';
 
 export interface StepProps {
+	number?: number;
 	label: string;
 	state?: StepState;
 	active?: boolean;
@@ -20,7 +21,7 @@ export interface StepProps {
 }
 
 const Step: React.FC<StepProps> = (props) => {
-	const { label, active, disabled: disabledProp, state = 'initial', onClick, children } = props;
+	const { number, label, active, disabled: disabledProp, state = 'initial', onClick, children } = props;
 	const disabled = disabledProp || state === 'initial';
 
 	const handleClick = () => {
@@ -31,7 +32,9 @@ const Step: React.FC<StepProps> = (props) => {
 	return (
 		<div className={cc(['step', { 'is-disabled': disabled }, `is-${state}`])}>
 			<div className="step__spot" onClick={handleClick}>
-				<div className="step__spot-graphic" onClick={handleClick} />
+				<div className="step__spot-graphic" onClick={handleClick}>
+					{number}
+				</div>
 				{active && <div className="step__active-arrow">➔</div>}
 				{active && <div className="step__actions">{children}</div>}
 			</div>

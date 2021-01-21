@@ -1,47 +1,72 @@
 import { Machine, sendParent } from 'xstate';
 
-interface EventHookProps {
-	id: string;
-}
-
 interface StepMachineFactoryProps {
 	id: string;
+	context?: Partial<StepMachineContext>;
+}
+
+export interface StepMachineContext {
+	disableProcessFromStates: ('ready' | 'outdatable' | 'outdated' | 'complete' | 'invalid')[];
 }
 
 export const stepMachineFactory = (props: StepMachineFactoryProps) => {
-	const { id } = props;
+	const { id, context = {} } = props;
 
-	return Machine({
+	return Machine<StepMachineContext>({
 		id,
 		initial: 'initial',
+		context: {
+			disableProcessFromStates: [],
+			...context,
+		},
 		states: {
 			initial: {
 				on: {
 					START: 'ready',
+					OUTDATABLE: 'outdatable',
 				},
 			},
 			ready: {
+				// entry: sendParent({ type: 'STEP_READY', id }),
 				on: {
-					PROCESS: 'processing',
-					TOUCHED: 'progress',
+					PROCESS: [
+						{
+							target: 'processing',
+							cond: (context) => !context.disableProcessFromStates.includes('ready'),
+						},
+						{
+							actions: sendParent({ type: 'STEP_INVALID', id }),
+							cond: (context) => context.disableProcessFromStates.includes('ready'),
+						},
+					],
+					TOUCH: 'touched',
+					OUTDATABLE: 'outdatable',
 				},
 			},
-			progress: {
+			outdatable: {
+				on: {
+					PROCESS: [
+						{
+							target: 'processing',
+							cond: (context) => !context.disableProcessFromStates.includes('outdatable'),
+						},
+						{
+							actions: sendParent({ type: 'STEP_INVALID', id }),
+							cond: (context) => context.disableProcessFromStates.includes('outdatable'),
+						},
+					],
+					TOUCH: 'touched',
+					OUTDATE: 'outdated',
+				},
+			},
+			touched: {
+				entry: sendParent({ type: 'STEP_TOUCHED', id }),
 				on: {
 					PROCESS: 'processing',
 					RESET: 'ready',
 				},
 			},
 			processing: {
-				// invoke: {
-				// 	src: () => process({ id }),
-				// 	onDone: {
-				// 		target: 'complete',
-				// 	},
-				// 	onError: {
-				// 		target: 'invalid',
-				// 	},
-				// },
 				entry: sendParent({ type: 'STEP_PROCESSING', id }),
 				on: {
 					VALID: 'complete',
@@ -51,24 +76,58 @@ export const stepMachineFactory = (props: StepMachineFactoryProps) => {
 			complete: {
 				entry: sendParent({ type: 'STEP_COMPLETE', id }),
 				on: {
-					OUTDATED: 'outdated',
-					PROCESS: 'processing',
-					TOUCHED: 'progress',
+					OUTDATE: 'outdated',
+					PROCESS: [
+						// Force running of every step when workflow is running
+						// {
+						// 	target: 'processing',
+						// 	cond: (context) => !context.disableProcessFromStates.includes('complete'),
+						// },
+						// {
+						// 	actions: sendParent({ type: 'STEP_INVALID', id }),
+						// 	cond: (context) => context.disableProcessFromStates.includes('complete'),
+						// },
+
+						// Skip step when workflow is running
+						{
+							actions: sendParent('STEP_COMPLETE'),
+						},
+					],
+					TOUCH: 'touched',
+					LOCK: 'locked',
 				},
 			},
 			invalid: {
 				entry: sendParent({ type: 'STEP_INVALID', id }),
 				on: {
-					OUTDATED: 'outdated',
-					PROCESS: 'processing',
-					TOUCHED: 'progress',
+					OUTDATE: 'outdated',
+					PROCESS: [
+						{
+							target: 'processing',
+							cond: (context) => !context.disableProcessFromStates.includes('invalid'),
+						},
+						{
+							actions: sendParent({ type: 'STEP_INVALID', id }),
+							cond: (context) => context.disableProcessFromStates.includes('invalid'),
+						},
+					],
+					TOUCH: 'touched',
 				},
 			},
 			outdated: {
 				entry: sendParent({ type: 'STEP_OUTDATED', id }),
 				on: {
-					PROCESS: 'processing',
-					TOUCHED: 'progress',
+					PROCESS: [
+						{
+							target: 'processing',
+							cond: (context) => !context.disableProcessFromStates.includes('outdated'),
+						},
+						{
+							actions: sendParent({ type: 'STEP_INVALID', id }),
+							cond: (context) => context.disableProcessFromStates.includes('outdated'),
+						},
+					],
+					TOUCH: 'touched',
 				},
 			},
 			locked: {

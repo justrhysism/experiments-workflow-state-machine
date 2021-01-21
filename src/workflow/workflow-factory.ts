@@ -3,26 +3,15 @@
  */
 
 import { useMemo } from 'react';
-import {
-	Machine,
-	assign,
-	spawn,
-	send,
-	ActorRef,
-	ActorRefFrom,
-	EventObject,
-	ActionObject,
-	AnyEventObject,
-} from 'xstate';
+import { Machine, assign, spawn, send, EventObject, ActionObject, AnyEventObject } from 'xstate';
 import { useMachine } from '@xstate/react';
-// import { forEachRight } from 'lodash-es';
-import { stepMachineFactory } from '../stepMachine';
-import { choose, pure, raise } from 'xstate/lib/actions';
+import { stepMachineFactory, StepMachineContext } from '../stepMachine';
+import { pure } from 'xstate/lib/actions';
 
 export const stepRefId = (id: string) => `${id}Ref`;
 export const undoStepRefId = (refId: string) => refId.split('Ref')[0];
 
-const handleStepComplete = pure<WorkflowMachineContext, AnyEventObject>((context, { id }) => {
+const handleStepCompleteAction = pure<WorkflowMachineContext, AnyEventObject>((context, { id }) => {
 	const actions: ActionObject<WorkflowMachineContext, EventObject>[] = [];
 
 	const completeStepGraphItem = context.graphMap.get(id);
@@ -31,9 +20,8 @@ const handleStepComplete = pure<WorkflowMachineContext, AnyEventObject>((context
 	const readyStepRefs = completeStepGraphItem.children ?? [];
 
 	// Ready (unlock) next steps
-	readyStepRefs.forEach((item) => {
-		context[item.refId]?.send('START');
-		actions.push(send('START', { to: context[item.refId] }));
+	readyStepRefs.forEach((step) => {
+		actions.push(send(step.readyEvent, { to: context[step.refId] }));
 	});
 
 	// Move to next step (if there is one)
@@ -42,12 +30,36 @@ const handleStepComplete = pure<WorkflowMachineContext, AnyEventObject>((context
 		assign<WorkflowMachineContext>({ currentStepIndex: () => nextIndex })
 	);
 
+	// Final step, lock workflow
+	const finalStep = context.graphIndexMap.get(context.graphIndexMap.size - 1);
+	if (id === finalStep?.id) {
+		context.graphMap.forEach((step) => actions.push(send('LOCK', { to: context[step.refId] })));
+		actions.push(send('LOCK'));
+	}
+
 	return actions;
 });
 
-export interface WorkflowStepDefinition {
+const getAllDependencies = (graph: Graph, soft: boolean = false): Graph[] =>
+	[
+		graph.children,
+		graph.children.map((c) => getAllDependencies(c)).flat(),
+		(soft ? [graph.related, graph.related.map((c) => getAllDependencies(c, true))].flat() : []).flat(),
+	].flat();
+
+const handleStepTouchAction = pure<WorkflowMachineContext, AnyEventObject>((context, { id }) => {
+	const touched = context.graphMap.get(id);
+	if (!touched) return [];
+	const outdatedSteps = getAllDependencies(touched, true);
+
+	return outdatedSteps.map((outdated) => send('OUTDATE', { to: context[outdated.refId] }));
+});
+
+export interface WorkflowStepDefinition extends Partial<Pick<StepMachineContext, 'disableProcessFromStates'>> {
 	id: string;
 	deps?: string[];
+	softDeps?: string[];
+	outdatable?: boolean;
 }
 
 type TreeLike<T> = {
@@ -59,6 +71,8 @@ interface Graph extends Required<TreeLike<Graph>> {
 	index: number;
 	refId: string;
 	parents: Graph[];
+	related: Graph[];
+	readyEvent: 'START' | 'OUTDATABLE';
 }
 
 interface WorkflowMachineContext {
@@ -79,128 +93,172 @@ export const useWorkflowMachine = (props: WorkflowStateHookProps) => {
 	const { id: workflowId = 'workflow', steps, onProcess = async () => void 0 } = props;
 
 	// const dependencyGraph
-	const workflowMachine = useMemo(() => {
-		const _steps = steps ?? [];
+	const workflowMachine = useMemo(
+		() => {
+			const _steps = steps ?? [];
 
-		const firstStepId = _steps[0]?.id;
-		const stepSpawns = Object.fromEntries(
-			_steps.map(({ id }) => [stepRefId(id), () => spawn(stepMachineFactory({ id }), { sync: true })])
-		);
-		const stepRefs = Object.fromEntries(Object.keys(stepSpawns).map((k) => [k, null]));
+			const firstStepId = _steps[0]?.id;
+			const stepSpawns = Object.fromEntries(
+				_steps.map(({ id, disableProcessFromStates }) => [
+					stepRefId(id),
+					() =>
+						spawn(stepMachineFactory({ id, context: { disableProcessFromStates: disableProcessFromStates ?? [] } }), {
+							sync: true,
+						}),
+				])
+			);
+			const stepRefs = Object.fromEntries(Object.keys(stepSpawns).map((k) => [k, null]));
 
-		const graphIndexMap = new Map<number, Graph>();
-		const graphMap = new Map<string, Graph>(
-			_steps.map(({ id }, index) => [id, { id, refId: stepRefId(id), index, children: [], parents: [] }])
-		);
+			const graphIndexMap = new Map<number, Graph>();
+			const graphMap = new Map<string, Graph>(
+				_steps.map(({ id, outdatable }, index) => [
+					id,
+					{
+						id,
+						refId: stepRefId(id),
+						index,
+						children: [],
+						parents: [],
+						related: [],
+						readyEvent: outdatable ? 'OUTDATABLE' : 'START',
+					},
+				])
+			);
 
-		_steps.forEach((step) => {
-			const graphItem = graphMap.get(step.id);
-			if (!graphItem) return;
+			_steps.forEach((step) => {
+				const graphItem = graphMap.get(step.id);
+				if (!graphItem) return;
 
-			step.deps?.forEach((depId) => {
-				const depGraphItem = graphMap.get(depId);
-				if (!depGraphItem) return;
+				step.deps?.forEach((depId) => {
+					const depGraphItem = graphMap.get(depId);
+					if (!depGraphItem) return;
 
-				graphItem.parents.push(depGraphItem);
-				depGraphItem.children.push(graphItem);
+					graphItem.parents.push(depGraphItem);
+					depGraphItem.children.push(graphItem);
+				});
+
+				step.softDeps?.forEach((depId) => {
+					const depGraphItem = graphMap.get(depId);
+					if (!depGraphItem) return;
+
+					depGraphItem.related.push(graphItem);
+				});
+
+				// Update index map
+				graphIndexMap.set(graphItem.index, graphItem);
 			});
 
-			// Update index map
-			graphIndexMap.set(graphItem.index, graphItem);
-		});
+			console.log('graphMap', graphMap);
 
-		console.log('graphMap', graphMap);
-
-		return Machine<WorkflowMachineContext>({
-			id: workflowId,
-			initial: 'initial',
-			context: {
-				currentStepIndex: 0,
-				runningStepIndex: -1,
-				graphMap,
-				graphIndexMap,
-				...stepRefs,
-			},
-			states: {
-				initial: {
-					entry: assign<WorkflowMachineContext>({
-						...stepSpawns,
-					}),
-					always: 'start',
+			return Machine<WorkflowMachineContext>({
+				id: workflowId,
+				initial: 'initial',
+				context: {
+					currentStepIndex: 0,
+					runningStepIndex: -1,
+					graphMap,
+					graphIndexMap,
+					...stepRefs,
 				},
-				start: {
-					entry: send('START', { to: (context) => context[stepRefId(firstStepId)] }),
-					always: 'idle',
-				},
-				idle: {
-					entry: assign<WorkflowMachineContext>({ runningStepIndex: () => -1 }),
-					on: {
-						RUN: 'running',
-						STEP_OUTDATED: {}, // TODO
-						'currentStep.UPDATE': {
-							actions: assign({
-								currentStepIndex: (context, { value }) => {
-									if (typeof value === 'number') return value;
-									return context.graphMap.get(value)?.index ?? 0;
-								},
-							}),
-							cond: (context, { value }) => context[`${value}Ref`]?.state.value !== 'initial',
-						},
+				states: {
+					initial: {
+						entry: assign<WorkflowMachineContext>({
+							...stepSpawns,
+						}),
+						always: 'start',
 					},
-				},
-				running: {
-					initial: 'queue',
-					entry: assign({ runningStepIndex: (context) => -1 }),
-					on: {
-						STOP: 'idle',
+					start: {
+						entry: send('START', { to: (context) => context[stepRefId(firstStepId)] }),
+						always: 'idle',
 					},
-					states: {
-						queue: {
-							entry: assign({ runningStepIndex: (context) => (context.runningStepIndex ?? 0) + 1 }),
-							always: 'process',
-						},
-						process: {
-							entry: send('PROCESS', {
-								to: (context) => context[context.graphIndexMap.get(context.runningStepIndex)?.refId || ''],
-							}),
-							invoke: {
-								src: 'process',
-								onDone: {
-									actions: send('VALID', {
-										to: (context) => context[context.graphIndexMap.get(context.runningStepIndex)?.refId || ''],
-									}),
-								},
-								onError: {
-									actions: send('INVALID', {
-										to: (context) => context[context.graphIndexMap.get(context.runningStepIndex)?.refId || ''],
-									}),
-								},
+					idle: {
+						entry: assign<WorkflowMachineContext>({ runningStepIndex: () => -1 }),
+						on: {
+							LOCK: 'locked',
+							RUN: 'running',
+							STEP_TOUCHED: {
+								actions: handleStepTouchAction,
 							},
-							on: {
-								STEP_COMPLETE: [
-									{
-										target: 'done',
-										cond: (context) => context.currentStepIndex === context.runningStepIndex,
-										actions: handleStepComplete,
+							'currentStep.UPDATE': {
+								actions: assign({
+									currentStepIndex: (context, { value }) => {
+										if (typeof value === 'number') return value;
+										return context.graphMap.get(value)?.index ?? 0;
 									},
-									{ target: 'queue' },
-								],
-								STEP_INVALID: {
-									target: 'done',
-									actions: assign({ currentStepIndex: (context) => context.runningStepIndex }),
-								},
+								}),
+								cond: (context, { value }) => context[`${value}Ref`]?.state.value !== 'initial',
 							},
 						},
-						done: {
-							type: 'final',
-							exit: assign({ runningStepIndex: (context) => -1 }),
+					},
+					running: {
+						initial: 'queue',
+						entry: assign({ runningStepIndex: (context) => -1 }),
+						on: {
+							STOP: 'idle',
+						},
+						states: {
+							queue: {
+								entry: assign({ runningStepIndex: (context) => (context.runningStepIndex ?? 0) + 1 }),
+								always: 'process',
+							},
+							process: {
+								entry: send('PROCESS', {
+									to: (context) => context[context.graphIndexMap.get(context.runningStepIndex)?.refId || ''],
+								}),
+								invoke: {
+									src: 'process',
+									onDone: {
+										actions: send('VALID', {
+											to: (context) => context[context.graphIndexMap.get(context.runningStepIndex)?.refId || ''],
+										}),
+									},
+									onError: {
+										actions: send('INVALID', {
+											to: (context) => context[context.graphIndexMap.get(context.runningStepIndex)?.refId || ''],
+										}),
+									},
+								},
+								on: {
+									STEP_COMPLETE: [
+										{
+											target: 'done',
+											cond: (context) => context.currentStepIndex === context.runningStepIndex,
+											actions: handleStepCompleteAction,
+										},
+										{ target: 'queue' },
+									],
+									STEP_INVALID: {
+										target: 'done',
+										actions: assign({ currentStepIndex: (context) => context.runningStepIndex }),
+									},
+								},
+							},
+							done: {
+								type: 'final',
+								exit: assign({ runningStepIndex: (context) => -1 }),
+							},
+						},
+						onDone: 'idle',
+					},
+					locked: {
+						on: {
+							'currentStep.UPDATE': {
+								actions: assign({
+									currentStepIndex: (context, { value }) => {
+										if (typeof value === 'number') return value;
+										return context.graphMap.get(value)?.index ?? 0;
+									},
+								}),
+								cond: (context, { value }) => context[`${value}Ref`]?.state.value !== 'initial',
+							},
 						},
 					},
-					onDone: 'idle',
 				},
-			},
-		});
-	}, [workflowId, steps]);
+			});
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[]
+	);
 
 	return useMachine(workflowMachine, {
 		devTools: true,
